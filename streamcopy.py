@@ -11,7 +11,7 @@ import glob
 # the size of block used to find the position of end of DST in SRC.
 # note: false-positive (too small) or false-negative (too large) will
 # cause data duplication.
-PATTERN_SIZE = 1024
+PATTERN_SIZE = 4096
 BUFSIZE = 1<<20
 BATCH_SIZE = 1024
 WAIT_DURATION = 0.1
@@ -38,19 +38,28 @@ def search_pattch(f, pattern):
 def get_fsize(f):
     return os.fstat(f.fileno()).st_size
 
+def find_last_pos(fin, fout):
+    isize = get_fsize(fin)
+    osize = get_fsize(fout)
+    vl = min(min(osize, PATTERN_SIZE), isize)
+    if osize <= isize and vl < isize and vl < osize:
+        block = fin.read(vl)
+        fout.seek(0)
+        if fout.read(vl) == block:
+            return osize
+    fout.seek(osize-vl)
+    pattern = fout.read(vl)
+    return search_pattch(fin, pattern)
+
 def stream(src, dst, option):
     fout = open(dst, 'ab+', BUFSIZE+4096)
     open_files[dst] = fout
     fin = open(src, 'rb')
-    ssize = get_fsize(fin)
+    pos = get_fsize(fin)
     if option.resume:
-        dsize = fout.tell()
-        vl = min(min(dsize, PATTERN_SIZE), ssize)
-        fout.seek(dsize-vl)
-        pattern = fout.read(vl)
-        pos = search_pattch(fin, pattern)
-    else:
-        pos = ssize
+        pos = find_last_pos(fin, fout)
+        fout.seek(0, 2)
+    print 'start copying', src, 'at', pos
     fin.seek(pos)
     while True:
         line = fin.read(BUFSIZE)
@@ -102,7 +111,6 @@ def discover_new_file(gs, option):
         for g in gs:
             for path in glob.glob(g):
                 if path not in source_paths and os.path.isfile(path):
-                    print 'start stream for', path
                     source_paths[path] = start_stream(path, option)
         time.sleep(5)
 
@@ -114,9 +122,10 @@ def main():
     parser = optparse.OptionParser("streamcopy.py GLOBS ...")
     parser.add_option("--dst", help="output directory")
     parser.add_option("--pid", help="path for pid (SIGHUP to rotate)")
-    parser.add_option("--resume", help="resume copying based on guessed position "
-                      + "(try to find first occurrence of last block of output file "
-                      + " in input stream).")
+    parser.add_option("--resume", action="store_true",
+                      help="resume copying based on guessed position "
+                           + "(try to find first occurrence of last block of output file "
+                           + " in input stream).")
     option, globs = parser.parse_args()
     if not option.dst:
         print 'dst is required'
