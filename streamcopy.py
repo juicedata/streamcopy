@@ -18,6 +18,7 @@ WAIT_DURATION = 0.1
 
 source_paths = {}
 open_files = {}
+running = True
 
 def search_pattch(f, pattern):
     if not pattern: return 0
@@ -55,39 +56,49 @@ def stream(src, dst, option):
     fout = open(dst, 'ab+', BUFSIZE+4096)
     open_files[dst] = fout
     fin = open(src, 'rb')
-    pos = get_fsize(fin)
+    pos = get_fsize(fout)
     if option.resume:
         pos = find_last_pos(fin, fout)
         fout.seek(0, 2)
-    print 'start copying', src, 'at', pos
+    print('start copying', src, 'at', pos)
     fin.seek(pos)
-    while True:
+    last_copied = time.time()
+    while running:
         line = fin.read(BUFSIZE)
-        if line == BUFSIZE:
-            line += fin.readline()
-        pos += len(line)
         if not line:
-            while get_fsize(fin) == pos:
+            while running and get_fsize(fin) == pos:
                 if os.path.exists(src) and os.path.getsize(src) != pos:
                     break  # rotated
                 time.sleep(WAIT_DURATION)
+                if option.deleteAfter and time.time() > last_copied+option.deleteAfter:
+                    del source_paths[src]
+                    del open_files[dst]
+                    fin.close()
+                    fout.close()
+                    print("remove", src)
+                    os.remove(src)
+                    return
+            if not running:
+                return
             csize = get_fsize(fin)
             if csize > pos:
                 # tell File to read more data
                 fin.seek(pos)
             else:
                 fin.close()
-                fin = open(src)
+                fin = open(src, 'rb')
                 pos = 0
             continue
-        while True:
+        pos += len(line)
+        last_copied = time.time()
+        while running:
             try:
                 fout.write(line)
                 fout.flush()
                 break
             except ValueError:
                 # closed by rotate
-                fout = open(dst, 'ab', BUFSIZE+4096)
+                fout = open(dst, 'ab+', BUFSIZE+4096)
                 open_files[dst] = fout
 
 
@@ -102,44 +113,59 @@ def start_thread(func, args):
     t.start()
     return t
 
-def start_stream(path, option):
-    dst = os.path.join(option.dst, os.path.basename(path))
-    return start_thread(stream, (path, dst, option))
+def start_stream(src, dst, option):
+    return start_thread(stream, (src, dst, option))
 
-def discover_new_file(gs, option):
-    while True:
-        for g in gs:
-            for path in glob.glob(g):
-                if path not in source_paths and os.path.isfile(path):
-                    source_paths[path] = start_stream(path, option)
-        time.sleep(5)
+def discover_new_file(src, dst, option):
+    while running:
+        for root, dirs, names in os.walk(src):
+            if len(root) > len(src)+1:
+                t = os.path.join(dst, root[len(src)+1:])
+            else:
+                t = root
+            if not os.path.exists(t):
+                os.makedirs(t)    
+            for n in names:
+                p = os.path.join(root, n)
+                if p not in source_paths and os.path.isfile(p):
+                    t = os.path.join(dst, p[len(src)+1:])
+                    source_paths[p] = start_stream(p, t, option)
+        time.sleep(1)
 
-def rotate():
+def rotate(signum, frame):
     for f in open_files:
         open_files[f].close()
 
+def interrupted(signum, frame):
+    print("interrupted")
+    global running
+    running = False
+    os._exit(1)
+
 def main():
-    parser = optparse.OptionParser("streamcopy.py GLOBS ...")
-    parser.add_option("--dst", help="output directory")
+    parser = optparse.OptionParser("streamcopy.py SRC DST [OPTIONS]")
     parser.add_option("--pid", help="path for pid (SIGHUP to rotate)")
+    parser.add_option("--delete-after", dest="deleteAfter", type=int,
+                      help="delete files after no new data for N seconds")
     parser.add_option("--resume", action="store_true",
                       help="resume copying based on guessed position "
                            + "(try to find first occurrence of last block of output file "
                            + " in input stream).")
-    option, globs = parser.parse_args()
-    if not option.dst:
-        print 'dst is required'
+    option, args = parser.parse_args()
+    if len(args) < 2:
+        parser.print_usage()
         return
-    if not os.path.exists(option.dst):
-        os.makedirs(option.dst)
+    src, dst = args
+    if not os.path.exists(dst):
+        os.makedirs(dst)
     if option.pid:
         with open(option.pid, 'w') as f:
             f.write(str(os.getpid()))
-        signal.signal(signal.SIGHUP, lambda signum, frame: rotate())
-    try:
-        discover_new_file(globs, option)
-    except KeyboardInterrupt:
-        return
+        signal.signal(signal.SIGHUP, rotate)
+    signal.signal(signal.SIGINT, interrupted)
+    start_thread(discover_new_file, (src, dst, option))
+    while running:
+        time.sleep(1)
 
 if __name__ == '__main__':
     main()
