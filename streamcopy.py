@@ -20,6 +20,9 @@ source_paths = {}
 open_files = {}
 running = True
 
+def log(msg):
+    sys.stderr.write("[" + time.asctime() + "] INFO " + msg + "\n")
+
 def search_pattch(f, pattern):
     if not pattern: return 0
     buff = ''
@@ -60,7 +63,7 @@ def stream(src, dst, option):
     if option.resume:
         pos = find_last_pos(fin, fout)
         fout.seek(0, 2)
-    print('start copying', src, 'at', pos)
+    log('start copying %s at %d' % (src, pos))
     fin.seek(pos)
     last_copied = time.time()
     while running:
@@ -70,13 +73,14 @@ def stream(src, dst, option):
                 if os.path.exists(src) and os.path.getsize(src) != pos:
                     break  # rotated
                 time.sleep(WAIT_DURATION)
-                if option.deleteAfter and time.time() > last_copied+option.deleteAfter:
-                    del source_paths[src]
-                    del open_files[dst]
+                if not os.path.exists(src) or option.deleteAfter and time.time() > last_copied+option.deleteAfter:
                     fin.close()
                     fout.close()
-                    print("remove", src)
-                    os.remove(src)
+                    if option.deleteAfter and time.time() > last_copied+option.deleteAfter:
+                        log("remove %s" % src)
+                        os.remove(src)
+                    del source_paths[src]
+                    del open_files[dst]
                     return
             if not running:
                 return
@@ -118,6 +122,7 @@ def start_stream(src, dst, option):
 
 def discover_new_file(src, dst, option):
     while running:
+        now = time.time()
         for root, dirs, names in os.walk(src):
             if len(root) > len(src)+1:
                 t = os.path.join(dst, root[len(src)+1:])
@@ -127,6 +132,9 @@ def discover_new_file(src, dst, option):
                 os.makedirs(t)    
             for n in names:
                 p = os.path.join(root, n)
+                if os.path.getsize(p) == 0 and os.path.getmtime(p)+option.deleteAfter < now:
+                    os.remove(p)
+                    continue
                 if p not in source_paths and os.path.isfile(p):
                     t = os.path.join(dst, p[len(src)+1:])
                     source_paths[p] = start_stream(p, t, option)
