@@ -7,6 +7,7 @@ import optparse
 import threading
 import signal
 import glob
+import traceback
 
 # the size of block used to find the position of end of DST in SRC.
 # note: false-positive (too small) or false-negative (too large) will
@@ -57,7 +58,6 @@ def find_last_pos(fin, fout):
 
 def stream(src, dst, option):
     fout = open(dst, 'ab+', BUFSIZE+4096)
-    open_files[dst] = fout
     fin = open(src, 'rb')
     pos = get_fsize(fout)
     if option.resume:
@@ -65,7 +65,6 @@ def stream(src, dst, option):
         fout.seek(0, 2)
     log('start copying %s at %d' % (src, pos))
     fin.seek(pos)
-    last_copied = time.time()
     while running:
         line = fin.read(BUFSIZE)
         if not line:
@@ -73,14 +72,13 @@ def stream(src, dst, option):
                 if os.path.exists(src) and os.path.getsize(src) != pos:
                     break  # rotated
                 time.sleep(WAIT_DURATION)
-                if not os.path.exists(src) or option.deleteAfter and time.time() > last_copied+option.deleteAfter:
+                if not os.path.exists(src) or option.deleteAfter and time.time() > os.path.getmtime(path)+option.deleteAfter:
                     fin.close()
-                    fout.close()
-                    if option.deleteAfter and time.time() > last_copied+option.deleteAfter:
+                    if os.path.exists(src):
                         log("remove %s" % src)
                         os.remove(src)
                     del source_paths[src]
-                    del open_files[dst]
+                    fout.close()
                     return
             if not running:
                 return
@@ -103,7 +101,6 @@ def stream(src, dst, option):
             except ValueError:
                 # closed by rotate
                 fout = open(dst, 'ab+', BUFSIZE+4096)
-                open_files[dst] = fout
 
 
 def start_thread(func, args):
@@ -123,6 +120,7 @@ def start_stream(src, dst, option):
             stream(src, dst, option)
         except Exception as e:
             print("stream", str(e))
+            traceback.print_exc()
             source_paths.pop(src, None)
     return start_thread(safe_stream, (src, dst, option))
 
@@ -146,7 +144,8 @@ def discover_new_file(src, dst, option):
                         t = os.path.join(dst, p[len(src)+1:])
                         source_paths[p] = start_stream(p, t, option)
         except Exception as e:
-            print("exception:", str(e))
+            print("discover", str(e))
+            traceback.print_exc()
         time.sleep(1)
 
 def rotate(signum, frame):
