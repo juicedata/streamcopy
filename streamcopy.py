@@ -72,7 +72,7 @@ def stream(src, dst, option):
                 if os.path.exists(src) and os.path.getsize(src) != pos:
                     break  # rotated
                 time.sleep(WAIT_DURATION)
-                if not os.path.exists(src) or option.deleteAfter and time.time() > os.path.getmtime(path)+option.deleteAfter:
+                if not os.path.exists(src) or option.deleteAfter and time.time() > os.path.getmtime(src)+option.deleteAfter:
                     fin.close()
                     if os.path.exists(src):
                         log("remove %s" % src)
@@ -127,25 +127,25 @@ def start_stream(src, dst, option):
 def discover_new_file(src, dst, option):
     while running:
         now = time.time()
-        try:
-            for root, dirs, names in os.walk(src):
-                if len(root) > len(src)+1:
-                    t = os.path.join(dst, root[len(src)+1:])
-                else:
-                    t = root
-                if not os.path.exists(t):
-                    os.makedirs(t)
-                for n in names:
-                    p = os.path.join(root, n)
+        for root, dirs, names in os.walk(src):
+            if len(root) > len(src)+1:
+                t = os.path.join(dst, root[len(src)+1:])
+            else:
+                t = root
+            if not os.path.exists(t):
+                try: os.makedirs(t)
+                except: pass
+            for n in names:
+                p = os.path.join(root, n)
+                try:
                     if os.path.getsize(p) == 0 and os.path.getmtime(p)+option.deleteAfter < now:
                         os.remove(p)
                         continue
                     if p not in source_paths and os.path.isfile(p):
                         t = os.path.join(dst, p[len(src)+1:])
                         source_paths[p] = start_stream(p, t, option)
-        except Exception as e:
-            print("discover", str(e))
-            traceback.print_exc()
+                except Exception as e:
+                    print("found", p, str(e))
         time.sleep(1)
 
 def rotate(signum, frame):
