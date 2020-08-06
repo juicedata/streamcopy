@@ -118,26 +118,35 @@ def start_thread(func, args):
     return t
 
 def start_stream(src, dst, option):
-    return start_thread(stream, (src, dst, option))
+    def safe_stream(src, dst, option):
+        try:
+            stream(src, dst, option)
+        except Exception as e:
+            print("stream", str(e))
+            source_paths.pop(src, None)
+    return start_thread(safe_stream, (src, dst, option))
 
 def discover_new_file(src, dst, option):
     while running:
         now = time.time()
-        for root, dirs, names in os.walk(src):
-            if len(root) > len(src)+1:
-                t = os.path.join(dst, root[len(src)+1:])
-            else:
-                t = root
-            if not os.path.exists(t):
-                os.makedirs(t)    
-            for n in names:
-                p = os.path.join(root, n)
-                if os.path.getsize(p) == 0 and os.path.getmtime(p)+option.deleteAfter < now:
-                    os.remove(p)
-                    continue
-                if p not in source_paths and os.path.isfile(p):
-                    t = os.path.join(dst, p[len(src)+1:])
-                    source_paths[p] = start_stream(p, t, option)
+        try:
+            for root, dirs, names in os.walk(src):
+                if len(root) > len(src)+1:
+                    t = os.path.join(dst, root[len(src)+1:])
+                else:
+                    t = root
+                if not os.path.exists(t):
+                    os.makedirs(t)
+                for n in names:
+                    p = os.path.join(root, n)
+                    if os.path.getsize(p) == 0 and os.path.getmtime(p)+option.deleteAfter < now:
+                        os.remove(p)
+                        continue
+                    if p not in source_paths and os.path.isfile(p):
+                        t = os.path.join(dst, p[len(src)+1:])
+                        source_paths[p] = start_stream(p, t, option)
+        except Exception as e:
+            print("exception:", str(e))
         time.sleep(1)
 
 def rotate(signum, frame):
